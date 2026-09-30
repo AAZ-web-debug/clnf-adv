@@ -6,6 +6,7 @@ import React, {
 import "./admin.css";
 import BackButton from "../components/BackButton";
 import ConfirmModal from "../components/ConfirmModal";
+import { API_BASE } from "../config";
 
 const formatStatus = (value) => {
   if (!value) return "";
@@ -46,12 +47,13 @@ function AdminPage() {
     fetchItems();
     fetchClaims();
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchStats = () => {
 
     fetch(
-      "http://localhost:5000/api/admin/stats",
+      `${API_BASE}/api/admin/stats`,
       {
         headers: {
           Authorization:
@@ -78,7 +80,7 @@ function AdminPage() {
   const fetchUsers = () => {
 
     fetch(
-      "http://localhost:5000/api/admin/users",
+      `${API_BASE}/api/admin/users`,
       {
         headers: {
           Authorization:
@@ -102,7 +104,7 @@ function AdminPage() {
   const fetchItems = () => {
 
     fetch(
-      "http://localhost:5000/api/admin/items",
+      `${API_BASE}/api/admin/items`,
       {
         headers: {
           Authorization:
@@ -126,7 +128,7 @@ function AdminPage() {
   const fetchClaims = () => {
 
     fetch(
-      "http://localhost:5000/api/admin/claims",
+      `${API_BASE}/api/admin/claims`,
       {
         headers: {
           Authorization:
@@ -181,7 +183,7 @@ const handleConfirmDelete = async () => {
   try {
 
     const res = await fetch(
-      `http://localhost:5000${endpoint}`,
+      `${API_BASE}${endpoint}`,
       {
         method: "DELETE",
 

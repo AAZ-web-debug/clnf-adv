@@ -10,6 +10,7 @@ import { useToast } from "../components/Toast";
 import ConfirmModal from "../components/ConfirmModal";
 import BackButton from "../components/BackButton";
 import ApproveClaimModal from "../components/ApproveClaimModal";
+import { API_BASE } from "../config";
 
 
 function ReviewClaims() {
@@ -35,6 +36,7 @@ function ReviewClaims() {
 
   useEffect(() => {
     fetchClaims();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -46,7 +48,7 @@ function ReviewClaims() {
         localStorage.getItem("token");
 
       const res = await fetch(
-        "http://localhost:5000/api/claims",
+        `${API_BASE}/api/claims`,
         {
           headers: {
             Authorization:
@@ -97,7 +99,7 @@ function ReviewClaims() {
         localStorage.getItem("token");
 
       const res = await fetch(
-        `http://localhost:5000/api/claims/${id}/approve`,
+        `${API_BASE}/api/claims/${id}/approve`,
         {
           method: "POST",
 
@@ -153,7 +155,7 @@ function ReviewClaims() {
       const token = localStorage.getItem("token");
 
       const res = await fetch(
-        `http://localhost:5000/api/claims/${id}/request-info`,
+        `${API_BASE}/api/claims/${id}/request-info`,
         {
           method: "POST",
           headers: {
@@ -188,7 +190,7 @@ function ReviewClaims() {
         localStorage.getItem("token");
 
       const res = await fetch(
-        `http://localhost:5000/api/claims/${id}/reject`,
+        `${API_BASE}/api/claims/${id}/reject`,
         {
           method: "POST",
 

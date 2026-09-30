@@ -5,7 +5,7 @@ import { useToast } from '../components/Toast';
 import { getUserId } from '../services/auth';
 import './chat.css';
 
-const API_BASE = 'http://localhost:5000';
+import { API_BASE } from '../config';
 
 function ChatPage() {
   const navigate = useNavigate();

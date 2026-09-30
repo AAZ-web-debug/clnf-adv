@@ -15,7 +15,7 @@ import BackButton from '../components/BackButton';
 import './myclaims.css';
 
 
-const API_BASE = 'http://localhost:5000';
+import { API_BASE } from '../config';
 
 
 function MyClaims() {

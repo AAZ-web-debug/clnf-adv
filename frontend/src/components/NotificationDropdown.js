@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './notification.css';
 
-const API_BASE = 'http://localhost:5000';
+import { API_BASE } from '../config';
 
 function NotificationDropdown() {
   const navigate = useNavigate();
