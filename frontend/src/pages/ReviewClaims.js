@@ -2,6 +2,7 @@ import React, {
   useEffect,
   useState
 } from "react";
+import { useNavigate } from "react-router-dom";
 
 import "./reviewclaims.css";
 
@@ -12,6 +13,7 @@ import ApproveClaimModal from "../components/ApproveClaimModal";
 
 
 function ReviewClaims() {
+  const navigate = useNavigate();
 
   const [claims, setClaims] =
     useState([]);
@@ -66,7 +68,8 @@ function ReviewClaims() {
       setClaims(
         data.filter(
           (claim) =>
-            claim.status === "pending"
+            claim.status === "pending" ||
+            claim.status === "additional_info_requested"
         )
       );
 
@@ -142,6 +145,38 @@ function ReviewClaims() {
 
     }
 
+  };
+
+
+  const requestInfoClaim = async (id) => {
+    try {
+      const token = localStorage.getItem("token");
+
+      const res = await fetch(
+        `http://localhost:5000/api/claims/${id}/request-info`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to request additional info");
+      }
+
+      success(
+        "Requested additional info from claimant. An 'Additional Info' chat conversation is now active."
+      );
+
+      fetchClaims();
+
+    } catch (err) {
+      error(err.message || "Failed to request additional info");
+    }
   };
 
 
@@ -271,9 +306,24 @@ function ReviewClaims() {
               key={claim.id}
             >
 
-              <h2>
-                {claim.title}
-              </h2>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2>
+                  {claim.title}
+                </h2>
+                {claim.status === "additional_info_requested" && (
+                  <span style={{
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    background: 'rgba(245, 158, 11, 0.18)',
+                    color: '#fbbf24',
+                    border: '1px solid rgba(245, 158, 11, 0.3)'
+                  }}>
+                    ℹ️ Info Requested
+                  </span>
+                )}
+              </div>
 
 
               <p>
@@ -340,7 +390,7 @@ function ReviewClaims() {
               </p>
 
 
-              <div className="actions">
+              <div className="actions" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
 
                 <button
                   className="approve-btn"
@@ -353,6 +403,16 @@ function ReviewClaims() {
                   Approve
                 </button>
 
+                <button
+                  className="req-info-btn"
+                  onClick={() =>
+                    requestInfoClaim(
+                      claim.id
+                    )
+                  }
+                >
+                  Request Info
+                </button>
 
                 <button
                   className="reject-btn"
@@ -364,6 +424,18 @@ function ReviewClaims() {
                 >
                   Reject
                 </button>
+
+                {claim.status === "additional_info_requested" && (
+                  <button
+                    className="chat-btn"
+                    onClick={() =>
+                      navigate(`/chat?claimId=${claim.id}`)
+                    }
+                    style={{ width: '100%', marginTop: '4px' }}
+                  >
+                    💬 Open Chat with Claimant
+                  </button>
+                )}
 
               </div>
 

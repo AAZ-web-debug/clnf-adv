@@ -19,6 +19,7 @@ import AdminPage from './pages/AdminPage';
 import AdminRoute from './components/AdminRoute';
 import { ToastProvider } from './components/Toast';
 import MyClaims from "./pages/MyClaims";
+import ChatPage from "./pages/ChatPage";
 
 function App() {
   return (
@@ -69,9 +70,14 @@ function App() {
           />
 
           <Route
-  path="/my-claims"
-  element={<MyClaims />}
-/>
+            path="/my-claims"
+            element={<MyClaims />}
+          />
+
+          <Route
+            path="/chat"
+            element={<ChatPage />}
+          />
 
           <Route
             path="/admin"

@@ -121,6 +121,123 @@ CREATE TABLE IF NOT EXISTS claim_contacts (
 )
 `).run();
 
+/* CONVERSATIONS */
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  item_id INTEGER NOT NULL,
+  claim_id INTEGER NOT NULL,
+  type TEXT NOT NULL, -- 'claimed' or 'additional_info'
+
+  participant_one TEXT NOT NULL,
+  participant_two TEXT NOT NULL,
+
+  status TEXT DEFAULT 'active', -- 'active' or 'closed'
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY(item_id) REFERENCES items(id),
+  FOREIGN KEY(claim_id) REFERENCES claims(id)
+)
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_conversations_participants 
+  ON conversations(participant_one, participant_two)
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_conversations_item_claim 
+  ON conversations(item_id, claim_id)
+`).run();
+
+/* MESSAGES */
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  conversation_id INTEGER NOT NULL,
+  sender_id TEXT NOT NULL,
+  message TEXT NOT NULL,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  read_at DATETIME DEFAULT NULL,
+
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+)
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_messages_conv 
+  ON messages(conversation_id, created_at)
+`).run();
+
+/* NOTIFICATIONS */
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  user_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+
+  item_id INTEGER,
+  claim_id INTEGER,
+  conversation_id INTEGER,
+
+  is_read INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_notifications_user 
+  ON notifications(user_id, is_read)
+`).run();
+
+/* HELPER: CREATE NOTIFICATION */
+function createNotification({
+  user_id,
+  type,
+  title,
+  message,
+  item_id = null,
+  claim_id = null,
+  conversation_id = null
+}) {
+  try {
+    db.prepare(`
+      INSERT INTO notifications (
+        user_id,
+        type,
+        title,
+        message,
+        item_id,
+        claim_id,
+        conversation_id
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      user_id,
+      type,
+      title,
+      message,
+      item_id,
+      claim_id,
+      conversation_id
+    );
+  } catch (err) {
+    console.error('Failed to create notification:', err);
+  }
+}
+
+
 /* =========================
    MULTER
 ========================= */
@@ -664,7 +781,7 @@ app.post(
       });
     }
 
-    db.prepare(`
+    const result = db.prepare(`
       INSERT INTO claims (
         item_id,
         claimer_id,
@@ -687,8 +804,31 @@ app.post(
       'pending'
     );
 
+    const claimId = result.lastInsertRowid;
+
+    // Send notification to reporter/finder
+    createNotification({
+      user_id: item.finder_id,
+      type: 'claim_submitted',
+      title: 'New Claim Received',
+      message: `Someone has submitted a claim for "${item.title}".`,
+      item_id: item.id,
+      claim_id: claimId
+    });
+
+    // Send notification to claimant
+    createNotification({
+      user_id: req.user.userId,
+      type: 'claim_submitted',
+      title: 'Claim Submitted',
+      message: `Your claim for "${item.title}" has been submitted successfully.`,
+      item_id: item.id,
+      claim_id: claimId
+    });
+
     res.json({
-      message: 'Claim submitted'
+      message: 'Claim submitted',
+      claimId
     });
   }
 );
@@ -792,6 +932,124 @@ app.get(
 );
 
 /* =========================
+   REQUEST ADDITIONAL INFO
+========================= */
+
+app.post(
+  '/api/claims/:id/request-info',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const claim = db.prepare(`
+        SELECT *
+        FROM claims
+        WHERE id = ?
+      `).get(req.params.id);
+
+      if (!claim) {
+        return res.status(404).json({
+          error: 'Claim not found'
+        });
+      }
+
+      if (
+        claim.status !== 'pending' &&
+        claim.status !== 'additional_info_requested'
+      ) {
+        return res.status(400).json({
+          error: 'Only pending or active info requests can be updated'
+        });
+      }
+
+      const item = db.prepare(`
+        SELECT *
+        FROM items
+        WHERE id = ?
+      `).get(claim.item_id);
+
+      if (!item) {
+        return res.status(404).json({
+          error: 'Item not found'
+        });
+      }
+
+      if (item.finder_id !== req.user.userId) {
+        return res.status(403).json({
+          error: 'Only the finder can request additional information'
+        });
+      }
+
+      db.prepare(`
+        UPDATE claims
+        SET status = 'additional_info_requested'
+        WHERE id = ?
+      `).run(req.params.id);
+
+      let conv = db.prepare(`
+        SELECT *
+        FROM conversations
+        WHERE item_id = ?
+          AND claim_id = ?
+          AND type = 'additional_info'
+      `).get(claim.item_id, claim.id);
+
+      if (!conv) {
+        const resConv = db.prepare(`
+          INSERT INTO conversations (
+            item_id,
+            claim_id,
+            type,
+            participant_one,
+            participant_two,
+            status
+          )
+          VALUES (?, ?, 'additional_info', ?, ?, 'active')
+        `).run(
+          claim.item_id,
+          claim.id,
+          item.finder_id,
+          claim.claimer_id
+        );
+
+        conv = db.prepare(`
+          SELECT *
+          FROM conversations
+          WHERE id = ?
+        `).get(resConv.lastInsertRowid);
+      } else {
+        db.prepare(`
+          UPDATE conversations
+          SET status = 'active',
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(conv.id);
+      }
+
+      createNotification({
+        user_id: claim.claimer_id,
+        type: 'claim_additional_info',
+        title: 'Additional Info Requested',
+        message: `The reporter requested additional information for your claim on "${item.title}".`,
+        item_id: item.id,
+        claim_id: claim.id,
+        conversation_id: conv.id
+      });
+
+      res.json({
+        message: 'Additional information requested',
+        conversationId: conv.id
+      });
+
+    } catch (err) {
+      console.error('Request info error:', err);
+      res.status(500).json({
+        error: 'Failed to request additional info'
+      });
+    }
+  }
+);
+
+/* =========================
    APPROVE CLAIM
 ========================= */
 
@@ -799,96 +1057,112 @@ app.post(
   '/api/claims/:id/approve',
   authenticateToken,
   (req, res) => {
+    try {
+      const { email, phone } = req.body;
 
-    const {
-      email,
-      phone
-    } = req.body;
+      if (
+        (!email || !email.trim()) &&
+        (!phone || !phone.trim())
+      ) {
+        return res.status(400).json({
+          error: 'Please provide an email or phone number'
+        });
+      }
 
-    // At least one contact method is required
-    if (
-      (!email || !email.trim()) &&
-      (!phone || !phone.trim())
-    ) {
-      return res.status(400).json({
-        error:
-          'Please provide an email or phone number'
-      });
-    }
-
-    const claim =
-      db.prepare(`
+      const claim = db.prepare(`
         SELECT *
         FROM claims
         WHERE id = ?
       `).get(req.params.id);
 
-    if (!claim) {
-      return res.status(404).json({
-        error: 'Claim not found'
-      });
-    }
+      if (!claim) {
+        return res.status(404).json({
+          error: 'Claim not found'
+        });
+      }
 
-    if (claim.status !== 'pending') {
-      return res.status(400).json({
-        error:
-          'Only pending claims can be approved'
-      });
-    }
+      if (
+        claim.status !== 'pending' &&
+        claim.status !== 'additional_info_requested'
+      ) {
+        return res.status(400).json({
+          error: 'Only pending or info-requested claims can be approved'
+        });
+      }
 
-    const item =
-      db.prepare(`
+      const item = db.prepare(`
         SELECT *
         FROM items
         WHERE id = ?
       `).get(claim.item_id);
 
-    if (!item) {
-      return res.status(404).json({
-        error: 'Item not found'
-      });
-    }
+      if (!item) {
+        return res.status(404).json({
+          error: 'Item not found'
+        });
+      }
 
-    // Only the finder can approve
-    if (
-      item.finder_id !==
-      req.user.userId
-    ) {
-      return res.status(403).json({
-        error:
-          'Only the finder can approve claims'
-      });
-    }
+      if (item.finder_id !== req.user.userId) {
+        return res.status(403).json({
+          error: 'Only the finder can approve claims'
+        });
+      }
 
-    // Item must still be available
-    if (item.status !== 'found') {
-      return res.status(400).json({
-        error:
-          'This item is no longer available'
-      });
-    }
+      if (item.status !== 'found') {
+        return res.status(400).json({
+          error: 'This item is no longer available'
+        });
+      }
 
-    const approveClaim =
-      db.transaction(() => {
+      let claimedConvId = null;
 
+      const approveClaim = db.transaction(() => {
         // Approve selected claim
         db.prepare(`
           UPDATE claims
-          SET status='approved'
-          WHERE id=?
+          SET status = 'approved'
+          WHERE id = ?
         `).run(req.params.id);
 
-        // Reject every other pending claim
+        // Find and reject other claims for this item
+        const otherClaims = db.prepare(`
+          SELECT * FROM claims
+          WHERE item_id = ?
+            AND id <> ?
+            AND status IN ('pending', 'additional_info_requested')
+        `).all(claim.item_id, req.params.id);
+
+        for (const other of otherClaims) {
+          db.prepare(`
+            UPDATE claims
+            SET status = 'rejected'
+            WHERE id = ?
+          `).run(other.id);
+
+          db.prepare(`
+            UPDATE conversations
+            SET status = 'closed'
+            WHERE claim_id = ?
+              AND type = 'additional_info'
+          `).run(other.id);
+
+          createNotification({
+            user_id: other.claimer_id,
+            type: 'claim_rejected',
+            title: 'Claim Rejected',
+            message: `Your claim for "${item.title}" was rejected because another claim was approved.`,
+            item_id: item.id,
+            claim_id: other.id
+          });
+        }
+
+        // Close additional_info conversation for this approved claim if it exists
         db.prepare(`
-          UPDATE claims
-          SET status='rejected'
-          WHERE item_id=?
-            AND id<>?
-            AND status='pending'
-        `).run(
-          claim.item_id,
-          req.params.id
-        );
+          UPDATE conversations
+          SET status = 'closed'
+          WHERE claim_id = ?
+            AND type = 'additional_info'
+        `).run(req.params.id);
 
         // Store contact details
         db.prepare(`
@@ -907,20 +1181,72 @@ app.post(
         // Mark item as returned
         db.prepare(`
           UPDATE items
-          SET status='returned',
-              updated_at=CURRENT_TIMESTAMP
-          WHERE id=?
-        `).run(
-          claim.item_id
-        );
+          SET status = 'returned',
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(claim.item_id);
+
+        // Create or activate claimed conversation
+        let conv = db.prepare(`
+          SELECT *
+          FROM conversations
+          WHERE item_id = ?
+            AND claim_id = ?
+            AND type = 'claimed'
+        `).get(claim.item_id, claim.id);
+
+        if (!conv) {
+          const resConv = db.prepare(`
+            INSERT INTO conversations (
+              item_id,
+              claim_id,
+              type,
+              participant_one,
+              participant_two,
+              status
+            )
+            VALUES (?, ?, 'claimed', ?, ?, 'active')
+          `).run(
+            claim.item_id,
+            claim.id,
+            item.finder_id,
+            claim.claimer_id
+          );
+          claimedConvId = resConv.lastInsertRowid;
+        } else {
+          db.prepare(`
+            UPDATE conversations
+            SET status = 'active',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(conv.id);
+          claimedConvId = conv.id;
+        }
       });
 
-    approveClaim();
+      approveClaim();
 
-    res.json({
-      message:
-        'Claim approved and contact details shared'
-    });
+      // Notify approved claimant
+      createNotification({
+        user_id: claim.claimer_id,
+        type: 'claim_approved',
+        title: 'Claim Approved!',
+        message: `Your claim for "${item.title}" has been approved. You can now chat with the reporter!`,
+        item_id: item.id,
+        claim_id: claim.id,
+        conversation_id: claimedConvId
+      });
+
+      res.json({
+        message: 'Claim approved and contact details shared',
+        conversationId: claimedConvId
+      });
+    } catch (err) {
+      console.error('Approve claim error:', err);
+      res.status(500).json({
+        error: 'Failed to approve claim'
+      });
+    }
   }
 );
 
@@ -932,55 +1258,431 @@ app.post(
   '/api/claims/:id/reject',
   authenticateToken,
   (req, res) => {
-
-    const claim =
-      db.prepare(`
+    try {
+      const claim = db.prepare(`
         SELECT *
         FROM claims
         WHERE id = ?
       `).get(req.params.id);
 
-    if (!claim) {
-      return res.status(404).json({
-        error: 'Claim not found'
-      });
-    }
+      if (!claim) {
+        return res.status(404).json({
+          error: 'Claim not found'
+        });
+      }
 
-    const item =
-      db.prepare(`
+      const item = db.prepare(`
         SELECT *
         FROM items
         WHERE id = ?
       `).get(claim.item_id);
 
-    if (
-      item.finder_id !==
-      req.user.userId
-    ) {
-      return res.status(403).json({
-        error:
-          'Only the finder can reject claims'
+      if (!item) {
+        return res.status(404).json({
+          error: 'Item not found'
+        });
+      }
+
+      if (item.finder_id !== req.user.userId) {
+        return res.status(403).json({
+          error: 'Only the finder can reject claims'
+        });
+      }
+
+      const result = db.prepare(`
+        UPDATE claims
+        SET status = 'rejected'
+        WHERE id = ?
+          AND status IN ('pending', 'additional_info_requested')
+      `).run(req.params.id);
+
+      if (result.changes === 0) {
+        return res.status(400).json({
+          error: 'Only pending or active info-requested claims can be rejected'
+        });
+      }
+
+      // Close any active additional_info conversation
+      db.prepare(`
+        UPDATE conversations
+        SET status = 'closed'
+        WHERE claim_id = ?
+          AND type = 'additional_info'
+      `).run(req.params.id);
+
+      // Notify claimant
+      createNotification({
+        user_id: claim.claimer_id,
+        type: 'claim_rejected',
+        title: 'Claim Rejected',
+        message: `Your claim for "${item.title}" was rejected.`,
+        item_id: item.id,
+        claim_id: claim.id
+      });
+
+      res.json({
+        message: 'Claim rejected'
+      });
+    } catch (err) {
+      console.error('Reject claim error:', err);
+      res.status(500).json({
+        error: 'Failed to reject claim'
       });
     }
+  }
+);
 
-    const result = db.prepare(`
-  UPDATE claims
-  SET status='rejected'
-  WHERE id=?
-    AND status='pending'
-`).run(req.params.id);
+/* =========================
+   CONVERSATIONS API
+========================= */
 
-if (result.changes === 0) {
-  return res.status(400).json({
-    error: 'Only pending claims can be rejected'
-  });
-}
+// Get all conversations for current user
+app.get(
+  '/api/conversations',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
 
-    res.json({
-      message:
-        'Claim rejected'
-    });
+      const rawConvs = db.prepare(`
+        SELECT
+          c.*,
+          i.title AS item_title,
+          i.category AS item_category,
+          i.image_path AS item_image_path,
+          i.location AS item_location,
+          i.status AS item_status,
+          cl.status AS claim_status
+        FROM conversations c
+        JOIN items i ON c.item_id = i.id
+        JOIN claims cl ON c.claim_id = cl.id
+        WHERE c.participant_one = ? OR c.participant_two = ?
+        ORDER BY c.updated_at DESC
+      `).all(userId, userId);
 
+      const conversations = rawConvs.map((conv) => {
+        const otherParticipant =
+          conv.participant_one === userId
+            ? conv.participant_two
+            : conv.participant_one;
+
+        // Get last message
+        const lastMsg = db.prepare(`
+          SELECT message, created_at, sender_id
+          FROM messages
+          WHERE conversation_id = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).get(conv.id);
+
+        // Get unread count for current user
+        const unreadCount = db.prepare(`
+          SELECT COUNT(*) as count
+          FROM messages
+          WHERE conversation_id = ?
+            AND sender_id <> ?
+            AND read_at IS NULL
+        `).get(conv.id, userId).count;
+
+        return {
+          id: conv.id,
+          item_id: conv.item_id,
+          claim_id: conv.claim_id,
+          type: conv.type,
+          participant_one: conv.participant_one,
+          participant_two: conv.participant_two,
+          other_participant: otherParticipant,
+          status: conv.status,
+          created_at: conv.created_at,
+          updated_at: conv.updated_at,
+          item: {
+            id: conv.item_id,
+            title: conv.item_title,
+            category: conv.item_category,
+            image_path: conv.item_image_path,
+            location: conv.item_location,
+            status: conv.item_status,
+            claim_status: conv.claim_status
+          },
+          last_message: lastMsg ? lastMsg.message : null,
+          last_message_at: lastMsg ? lastMsg.created_at : conv.created_at,
+          last_message_sender: lastMsg ? lastMsg.sender_id : null,
+          unread_count: unreadCount
+        };
+      });
+
+      res.json(conversations);
+    } catch (err) {
+      console.error('Fetch conversations error:', err);
+      res.status(500).json({ error: 'Failed to fetch conversations' });
+    }
+  }
+);
+
+// Get single conversation
+app.get(
+  '/api/conversations/:id',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      const conv = db.prepare(`
+        SELECT
+          c.*,
+          i.title AS item_title,
+          i.category AS item_category,
+          i.image_path AS item_image_path,
+          i.location AS item_location,
+          i.status AS item_status,
+          cl.status AS claim_status
+        FROM conversations c
+        JOIN items i ON c.item_id = i.id
+        JOIN claims cl ON c.claim_id = cl.id
+        WHERE c.id = ?
+      `).get(req.params.id);
+
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+
+      if (conv.participant_one !== userId && conv.participant_two !== userId) {
+        return res.status(403).json({ error: 'Access denied to this conversation' });
+      }
+
+      const otherParticipant =
+        conv.participant_one === userId
+          ? conv.participant_two
+          : conv.participant_one;
+
+      res.json({
+        id: conv.id,
+        item_id: conv.item_id,
+        claim_id: conv.claim_id,
+        type: conv.type,
+        participant_one: conv.participant_one,
+        participant_two: conv.participant_two,
+        other_participant: otherParticipant,
+        status: conv.status,
+        created_at: conv.created_at,
+        updated_at: conv.updated_at,
+        item: {
+          id: conv.item_id,
+          title: conv.item_title,
+          category: conv.item_category,
+          image_path: conv.item_image_path,
+          location: conv.item_location,
+          status: conv.item_status,
+          claim_status: conv.claim_status
+        }
+      });
+    } catch (err) {
+      console.error('Fetch conversation error:', err);
+      res.status(500).json({ error: 'Failed to fetch conversation' });
+    }
+  }
+);
+
+// Get messages for conversation
+app.get(
+  '/api/conversations/:id/messages',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      const conv = db.prepare(`
+        SELECT * FROM conversations WHERE id = ?
+      `).get(req.params.id);
+
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+
+      if (conv.participant_one !== userId && conv.participant_two !== userId) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      // Mark unread messages as read for current user
+      db.prepare(`
+        UPDATE messages
+        SET read_at = CURRENT_TIMESTAMP
+        WHERE conversation_id = ?
+          AND sender_id <> ?
+          AND read_at IS NULL
+      `).run(req.params.id, userId);
+
+      const messages = db.prepare(`
+        SELECT id, conversation_id, sender_id, message, created_at, read_at
+        FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+      `).all(req.params.id);
+
+      res.json(messages);
+    } catch (err) {
+      console.error('Fetch messages error:', err);
+      res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+  }
+);
+
+// Send message in conversation
+app.post(
+  '/api/conversations/:id/messages',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+      const { message } = req.body;
+
+      if (typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({ error: 'Message text is required' });
+      }
+
+      const cleanMsg = message.trim();
+
+      if (cleanMsg.length > 2000) {
+        return res.status(400).json({ error: 'Message must be 2000 characters or less' });
+      }
+
+      const conv = db.prepare(`
+        SELECT c.*, i.title as item_title
+        FROM conversations c
+        JOIN items i ON c.item_id = i.id
+        WHERE c.id = ?
+      `).get(req.params.id);
+
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+
+      if (conv.participant_one !== userId && conv.participant_two !== userId) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      const result = db.prepare(`
+        INSERT INTO messages (conversation_id, sender_id, message)
+        VALUES (?, ?, ?)
+      `).run(req.params.id, userId, cleanMsg);
+
+      // Update conversation updated_at
+      db.prepare(`
+        UPDATE conversations
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(req.params.id);
+
+      // Notify the recipient
+      const recipientId =
+        conv.participant_one === userId
+          ? conv.participant_two
+          : conv.participant_one;
+
+      const preview = cleanMsg.length > 50 ? cleanMsg.slice(0, 47) + '...' : cleanMsg;
+
+      createNotification({
+        user_id: recipientId,
+        type: 'new_message',
+        title: `New message regarding ${conv.item_title}`,
+        message: `${userId}: ${preview}`,
+        item_id: conv.item_id,
+        claim_id: conv.claim_id,
+        conversation_id: conv.id
+      });
+
+      const insertedMessage = db.prepare(`
+        SELECT id, conversation_id, sender_id, message, created_at, read_at
+        FROM messages
+        WHERE id = ?
+      `).get(result.lastInsertRowid);
+
+      res.json(insertedMessage);
+    } catch (err) {
+      console.error('Send message error:', err);
+      res.status(500).json({ error: 'Failed to send message' });
+    }
+  }
+);
+
+/* =========================
+   NOTIFICATIONS API
+========================= */
+
+// Get user notifications
+app.get(
+  '/api/notifications',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      const notifications = db.prepare(`
+        SELECT *
+        FROM notifications
+        WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 50
+      `).all(userId);
+
+      const unreadCount = db.prepare(`
+        SELECT COUNT(*) as count
+        FROM notifications
+        WHERE user_id = ? AND is_read = 0
+      `).get(userId).count;
+
+      res.json({
+        notifications,
+        unreadCount
+      });
+    } catch (err) {
+      console.error('Fetch notifications error:', err);
+      res.status(500).json({ error: 'Failed to fetch notifications' });
+    }
+  }
+);
+
+// Mark single notification as read
+app.patch(
+  '/api/notifications/:id/read',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      db.prepare(`
+        UPDATE notifications
+        SET is_read = 1
+        WHERE id = ? AND user_id = ?
+      `).run(req.params.id, userId);
+
+      res.json({ message: 'Notification marked as read' });
+    } catch (err) {
+      console.error('Mark notification read error:', err);
+      res.status(500).json({ error: 'Failed to update notification' });
+    }
+  }
+);
+
+// Mark all notifications as read
+app.patch(
+  '/api/notifications/read-all',
+  authenticateToken,
+  (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      db.prepare(`
+        UPDATE notifications
+        SET is_read = 1
+        WHERE user_id = ?
+      `).run(userId);
+
+      res.json({ message: 'All notifications marked as read' });
+    } catch (err) {
+      console.error('Mark all read error:', err);
+      res.status(500).json({ error: 'Failed to update notifications' });
+    }
   }
 );
 
@@ -1270,7 +1972,6 @@ app.delete(
       */
 
       const deleteUser = db.transaction(() => {
-
         // Preserve reported items
         db.prepare(`
           UPDATE items
@@ -1283,6 +1984,25 @@ app.delete(
           UPDATE claims
           SET claimer_id = '[deleted-user]'
           WHERE claimer_id = ?
+        `).run(targetUser.user_id);
+
+        // Anonymize conversation participants
+        db.prepare(`
+          UPDATE conversations
+          SET participant_one = '[deleted-user]'
+          WHERE participant_one = ?
+        `).run(targetUser.user_id);
+
+        db.prepare(`
+          UPDATE conversations
+          SET participant_two = '[deleted-user]'
+          WHERE participant_two = ?
+        `).run(targetUser.user_id);
+
+        // Delete notifications for deleted user
+        db.prepare(`
+          DELETE FROM notifications
+          WHERE user_id = ?
         `).run(targetUser.user_id);
 
         // Delete the actual account
@@ -1368,9 +2088,30 @@ app.delete(
       */
 
       const deleteItem = db.transaction(() => {
+        // Delete messages associated with conversations for this item
+        db.prepare(`
+          DELETE FROM messages
+          WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE item_id = ?
+          )
+        `).run(itemId);
 
-        // Delete contact details belonging
-        // to claims for this item
+        // Delete notifications associated with this item or its conversations
+        db.prepare(`
+          DELETE FROM notifications
+          WHERE item_id = ?
+            OR conversation_id IN (
+              SELECT id FROM conversations WHERE item_id = ?
+            )
+        `).run(itemId, itemId);
+
+        // Delete conversations for this item
+        db.prepare(`
+          DELETE FROM conversations
+          WHERE item_id = ?
+        `).run(itemId);
+
+        // Delete contact details belonging to claims for this item
         db.prepare(`
           DELETE FROM claim_contacts
           WHERE claim_id IN (
@@ -1380,8 +2121,7 @@ app.delete(
           )
         `).run(itemId);
 
-        // Delete all claims belonging
-        // to this item
+        // Delete all claims belonging to this item
         db.prepare(`
           DELETE FROM claims
           WHERE item_id = ?
@@ -1392,7 +2132,6 @@ app.delete(
           DELETE FROM items
           WHERE id = ?
         `).run(itemId);
-
       });
 
       deleteItem();

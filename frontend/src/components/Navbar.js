@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { logout } from "../services/auth";
+import NotificationDropdown from "./NotificationDropdown";
 import "./navbar.css";
 
 function Navbar() {
@@ -57,6 +58,16 @@ function Navbar() {
         >
           Review Claims
         </button>
+
+        <button
+          onClick={() =>
+            navigate("/chat")
+          }
+        >
+          Chat
+        </button>
+
+        <NotificationDropdown />
 
         <button
           className="logout-nav"

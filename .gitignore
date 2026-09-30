@@ -10,4 +10,5 @@ backend/node_modules/
 .env
 
 uploads/*
-backend/uploads/*
+backend/uploads/*frontend/build/ 
+frontend/src/scratch/ 

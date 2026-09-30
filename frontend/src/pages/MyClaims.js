@@ -206,6 +206,23 @@ function MyClaims() {
     }
 
 
+    if (status === 'additional_info_requested') {
+
+      return {
+        className:
+          'claim-status info-requested',
+
+        icon: 'ℹ',
+
+        label: 'Info Requested',
+
+        description:
+          'The finder requested additional information to verify your ownership.'
+      };
+
+    }
+
+
     if (status === 'rejected') {
 
       return {
@@ -402,11 +419,52 @@ function MyClaims() {
                       </small>
 
 
-                      {/* APPROVED CLAIM CONTACT */}
+                      {/* ADDITIONAL INFO REQUESTED CHAT BUTTON */}
+                      {claim.status === 'additional_info_requested' && (
+                        <div style={{ marginTop: '16px' }}>
+                          <button
+                            className="browse-button"
+                            onClick={() =>
+                              navigate(`/chat?claimId=${claim.id}`)
+                            }
+                            style={{
+                              background: 'rgba(245, 158, 11, 0.2)',
+                              color: '#fbbf24',
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                              fontWeight: '600',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '8px'
+                            }}
+                          >
+                            💬 Provide Info / Open Chat
+                          </button>
+                        </div>
+                      )}
 
+                      {/* APPROVED CLAIM CHAT BUTTON & CONTACT */}
                       {claim.status === 'approved' && (
 
                         <div className="claim-contact-section">
+                          <div style={{ marginBottom: '12px' }}>
+                            <button
+                              className="browse-button"
+                              onClick={() =>
+                                navigate(`/chat?claimId=${claim.id}`)
+                              }
+                              style={{
+                                background: 'rgba(99, 102, 241, 0.2)',
+                                color: '#a5b4fc',
+                                border: '1px solid rgba(99, 102, 241, 0.4)',
+                                fontWeight: '600',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '8px'
+                              }}
+                            >
+                              💬 Chat with Finder
+                            </button>
+                          </div>
 
                           {!contact ? (
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { isAuthenticated, logout, getUserId, isAdmin } from '../services/auth';
+import NotificationDropdown from '../components/NotificationDropdown';
 import './dashboard.css';
 
 function Dashboard() {
@@ -55,6 +56,8 @@ function Dashboard() {
           <span>
             Welcome back, {getUserId()} 👋
           </span>
+
+          <NotificationDropdown />
 
           <button
             className="logout-btn"
@@ -157,6 +160,23 @@ function Dashboard() {
           <p>
             Verify ownership requests and
             approve or reject claims.
+          </p>
+        </div>
+
+        <div
+          className="action-card"
+          onClick={() => navigate('/chat')}
+        >
+          <div className="action-icon">
+            💬
+          </div>
+
+          <h2>
+            Messages & Chat
+          </h2>
+
+          <p>
+            Communicate with claimants and reporters regarding lost items.
           </p>
         </div>
 
