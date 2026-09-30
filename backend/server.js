@@ -10,12 +10,8 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = 5000;
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET is not configured');
-}
+const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || 'campus_lnf_fallback_jwt_secret_key_2026';
 
 app.use(cors());
 app.use(express.json());
@@ -24,10 +20,12 @@ app.use(express.json());
    UPLOADS
 ========================= */
 
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = process.env.VERCEL
+  ? path.join('/tmp', 'uploads')
+  : path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 app.use('/uploads', express.static(uploadsDir));
@@ -36,7 +34,11 @@ app.use('/uploads', express.static(uploadsDir));
    DATABASE
 ========================= */
 
-const db = new Database('campus_lnf.db');
+const dbPath = process.env.VERCEL
+  ? path.join('/tmp', 'campus_lnf.db')
+  : 'campus_lnf.db';
+
+const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
 /* USERS */
@@ -2203,15 +2205,15 @@ app.use((err, req, res, next) => {
   next();
 });
 
-/* =========================
-   START SERVER
-========================= */
+if (require.main === module) {
+  app.listen(
+    PORT,
+    () => {
+      console.log(
+        `🚀 Campus Lost & Found Backend V3 running on port ${PORT}`
+      );
+    }
+  );
+}
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `🚀 Campus Lost & Found Backend V3 running on port ${PORT}`
-    );
-  }
-);
+module.exports = app;
